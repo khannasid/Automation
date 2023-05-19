@@ -4,7 +4,6 @@ const path = require('path');
 const process = require('process');
 const {authenticate} = require('@google-cloud/local-auth');
 const {google} = require('googleapis');
-const { log } = require('console');
 
 // If modifying these scopes, delete token.json.
 const SCOPES = ['https://mail.google.com/'];
@@ -74,94 +73,101 @@ async function authorize() {
  * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
  */
 async function listLabels(auth) {
-  const gmail = google.gmail({version: 'v1', auth});
-  const res = await gmail.users.messages.list({
-    userId: 'me',
-    q: 'is:unread'
-  });
-  const labels = res.data.messages;
-  if (!labels || labels.length === 0) {
-    console.log('No labels found.');
-    return;
-  }
-  console.log('Messages:');
-  const save = [];
-  labels.forEach((label) => {
-      console.log(`-${label.id}`);
-      save.push(label.id);
-  });
-
-    console.log("HELLOOooooooooooooooooo");
-    console.log("Gmailllllllllllllllll");
-    save.forEach(async(id)=>{
-
-        await gmail.users.messages.get({
-            userId: 'me',
-            id: id,
-            format: 'full'
-        }, async (err, res) => {
-            if (err) return console.log('The API returned an error: ' + err);
-            
-            console.log("-------------->>>>>> ",res);
-
-            const threadId = res.data.threadId;
-            const threads = await gmail.users.threads.get({
-                userId: 'me',
-                id: threadId
-            });
-
-            const numReplies = threads.data.messages.length -1 
-            if(numReplies> 0){
-                console.log("Replied already!!");
-            }
-            else{
-                const headers = res.data.payload.headers;
-                const to = headers.find((header) => header.name === 'From').value;
-                const subject = headers.find((header) => header.name === 'Subject').value;
-                const messageBody = 'I am currently unavailable. I will reply as soon as possible.';
-                
-            const replyMessage = [
-                'Content-Type: text/plain; charset=utf-8',
-                `To: ${to}`,
-                `Subject: Re: ${subject}`,
-                '',
-                messageBody
-            ].join('\n');
-            
-            const encodedMessage = Buffer.from(replyMessage)
-            .toString('base64')
-            .replace(/\+/g, '-')
-            .replace(/\//g, '_')
-            .replace(/=+$/, '');
-            
-            await gmail.users.messages.send({
-                userId: 'me',
-                threadId: id,
-                resource: {
-                    raw: encodedMessage
-                }
-            }, (err, res) => {
-                if (err) return console.log('The API returned an error: ' + err);
-                console.log('Reply sent!');
-                
-            async()=>{
-                await gmail.users.messages.modify({
-                    userId: 'me',
-                    id: id,
-                    resource:{
-                        addLabelIds:['SPAM']
-                    }
-                },(err, res)=>{
-                    if(err)console.log("error while modifying labels",err);
-                    else console.log("RESPONSE of Labels=====>",res);
-                })
-            };
-            })
-        }
-        });
+    const gmail = google.gmail({version: 'v1', auth});
+    // Listing all unread messages!! 
+    const res = await gmail.users.messages.list({
+      userId: 'me', // my email
+      q: 'is:unread', // querying only unread message
+      maxResults: 1, // max mail to return
+      format: 'full'
     });
+    console.log(res, "   +++++++++++++++++++++++++++++   ");
+    const labels = res.data.messages;
+    if (!labels || labels.length === 0) {
+      console.log('No labels found.');
+      return;
+    }
+    
+    console.log('Messages:');
+    
+    const save = [];
+    labels.forEach(async (label) => {
+        console.log(`-${JSON.stringify(label)}`, " !!!!!!!!!!END!!!!!!!!!!!");
+
+        // Check if message has any threads or not!!
+        const response = await gmail.users.threads.list({
+          auth: auth,
+          userId: 'me',
+          q: `rfc822msgid:${label.id}`,
+        });
+    
+        const threads = response.data.threads;
+        if (threads && threads.length > 0) {
+          console.log(`Message with Message-ID ${label.id} has threads.`);
+        } else {
+          console.log(`Message with Message-ID ${label.id} does not have any threads.`);
+          save.push(label.id);
+
+          // Getting details of each message.
+          const message = await gmail.users.messages.get({
+            auth: auth,
+            userId: 'me',
+            id: label.id,
+            format: 'full'
+          });
+
+          const originalMessage = message.data;
+          console.log("Original Message here!!!  ",originalMessage.payload.headers);
+          
+          const replyBody = 'I am currently unavailable.';
+
+          const replySubject = `Re: ${originalMessage.payload.headers.find(h => h.name === 'Subject').value}`;
+          const replyTo =  `${originalMessage.payload.headers.find(h => h.name === 'From').value}`;
+          const replyMessageParts = [
+            `From: <khannasiddhant22@gmail.com>`, // Set the email address you want to use as the sender
+            `To: ${replyTo}`,
+            `Subject: ${replySubject}`,
+            `In-Reply-To: ${originalMessage.payload.headers.find(h => h.name === 'Message-ID').value}`,
+            `References: ${originalMessage.payload.headers.find(h => h.name === 'Message-ID').value}`,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            replyBody
+          ];
+
+          const replyMessageRaw = Buffer.from(replyMessageParts.join('\n'))
+                                  .toString('base64')
+                                  .replace(/\+/g, '-')
+                                  .replace(/\//g, '_')
+                                  .replace(/=+$/, '');
+
+          const reply = await gmail.users.messages.send({
+            auth: auth,
+            userId: 'me',
+            requestBody: {
+              raw: replyMessageRaw
+            },
+          });
+
+          console.log('Reply sent:', reply.data);
+
+          // Adding Labels!!!!
+          await gmail.users.messages.modify({
+            userId: 'me',
+            id : `${reply.data.id}`,
+            resource:{
+              addLabelIds: ['UNREAD']
+            }
+          },(err, res)=>{
+            if(err)console.log(err);
+            else console.log(res);
+          })
+        }
+    }), (error)=>{
+      if(error)console.log('Error detected ',err);
+      
+    };
        
-    setTimeout(listLabels,50000)// after 50 sec again invoke the function
+    // setTimeout(listLabels,50000)// after 50 sec again invoke the function
     }
 
 authorize().then(listLabels).catch(console.error);
